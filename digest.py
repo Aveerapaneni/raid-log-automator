@@ -17,11 +17,11 @@ higher.
 """
 
 import argparse
-import json
 import sys
 from collections import defaultdict
 
 import days_and_status as ds
+import raid_data
 import score_and_validate as sv
 
 CLOSED = "Closed"
@@ -163,10 +163,9 @@ def main():
 
     today = ds.parse_date(args.today) if args.today else None
 
-    with open(args.data) as f:
-        dataset = json.load(f)
+    dataset, entries = raid_data.load_converted_entries(args.data)
 
-    items = select_top_items(dataset["entries"], count=args.count, today=today)
+    items = select_top_items(entries, count=args.count, today=today)
     today_label = args.today or "today"
     print(format_digest(items, today_label))
     self_check(dataset, items)

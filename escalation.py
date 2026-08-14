@@ -18,6 +18,7 @@ import sys
 from datetime import date, datetime, timezone
 
 import days_and_status as ds
+import raid_data
 import score_and_validate as sv
 
 PRIORITY_RANK = {"Low": 1, "Medium": 2, "High": 3}
@@ -167,10 +168,9 @@ def main():
 
     today = ds.parse_date(args.today) if args.today else None
 
-    with open(args.data) as f:
-        dataset = json.load(f)
+    dataset, entries = raid_data.load_converted_entries(args.data)
 
-    records = build_records(dataset["entries"], today=today)
+    records = build_records(entries, today=today)
     timestamp = datetime.now(timezone.utc).isoformat()
     updated_records, events = apply_escalations(records, score_band, days_open_threshold, timestamp=timestamp)
 

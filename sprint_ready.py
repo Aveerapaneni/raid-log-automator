@@ -17,11 +17,11 @@ resolved by insertion order (Section 9).
 """
 
 import argparse
-import json
 import sys
 from collections import Counter
 
 import days_and_status as ds
+import raid_data
 import score_and_validate as sv
 
 CLOSED = "Closed"
@@ -160,10 +160,9 @@ def main():
 
     today = ds.parse_date(args.today) if args.today else None
 
-    with open(args.data) as f:
-        dataset = json.load(f)
+    dataset, entries = raid_data.load_converted_entries(args.data)
 
-    pile = build_pile(dataset["entries"], today=today)
+    pile = build_pile(entries, today=today)
     print_report(pile)
     self_check(dataset, pile)
     return 0

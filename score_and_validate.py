@@ -12,8 +12,9 @@ blank Probability is valid but unscored (PRD Section 9).
 """
 
 import argparse
-import json
 import sys
+
+import raid_data
 
 MITIGATION_REQUIRED_CATEGORIES = {"Risk", "Issue"}
 PROBABILITY_OPTIONAL_CATEGORY = "Issue"
@@ -185,10 +186,8 @@ def main():
     parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
     args = parser.parse_args()
 
-    with open(args.data) as f:
-        dataset = json.load(f)
+    dataset, entries = raid_data.load_converted_entries(args.data)
 
-    entries = dataset["entries"]
     results = process(entries)
     print_report(results)
     self_check(dataset, results)

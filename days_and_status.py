@@ -11,9 +11,10 @@ Given the mock dataset, computes:
 """
 
 import argparse
-import json
 import sys
 from datetime import date, datetime
+
+import raid_data
 
 NOT_STARTED = "Not Started"
 IN_PROGRESS = "In Progress"
@@ -122,10 +123,9 @@ def main():
 
     today = parse_date(args.today) if args.today else None
 
-    with open(args.data) as f:
-        dataset = json.load(f)
+    dataset, entries = raid_data.load_converted_entries(args.data)
 
-    results = process(dataset["entries"], today=today)
+    results = process(entries, today=today)
     print_report(results)
     self_check(dataset, results)
     return 0

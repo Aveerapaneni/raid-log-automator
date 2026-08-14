@@ -11,8 +11,9 @@ removes an entry from the dataset itself.
 """
 
 import argparse
-import json
 import sys
+
+import raid_data
 
 CLOSED = "Closed"
 
@@ -89,9 +90,7 @@ def main():
     parser.add_argument("--remove", metavar="ID", help="Attempt to remove an entry — always refused")
     args = parser.parse_args()
 
-    with open(args.data) as f:
-        dataset = json.load(f)
-    entries = dataset["entries"]
+    dataset, entries = raid_data.load_converted_entries(args.data)
 
     if args.close:
         try:
