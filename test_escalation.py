@@ -1,15 +1,23 @@
 """Unit tests for US-4: runtime-configurable escalation.
 
 Covers breach logic against synthetic records, idempotency (already
-Escalated/Closed never re-trigger), and the Section 9 refuse-rather-than-
-default behavior when no threshold is supplied.
+Escalated/Closed never re-trigger), the Section 9 refuse-rather-than-
+default behavior when no threshold is supplied, and the two integration
+points that were previously only exercised by manual CLI runs:
+build_records() (merges US-1/US-3 output) and append_log() (the audit
+trail the "logged with a timestamp" acceptance criterion depends on).
 """
+
+import json
+from datetime import date
 
 import pytest
 
 from escalation import (
+    append_log,
     apply_escalations,
     breaches_threshold,
+    build_records,
     resolve_days_open_threshold,
     resolve_score_band,
 )
@@ -172,3 +180,108 @@ def test_resolve_days_open_threshold_refuses_non_integer():
 def test_resolve_days_open_threshold_refuses_negative():
     with pytest.raises(ValueError):
         resolve_days_open_threshold(-5)
+
+
+# ---------------------------------------------------------------------------
+# build_records — merges US-1 (priority) and US-3 (effective status/days
+# open) per entry. Previously only exercised by a manual CLI run.
+# ---------------------------------------------------------------------------
+
+def raid_entry(**overrides):
+    base = {
+        "id": "T-1",
+        "category": "Risk",
+        "owner": "Test Owner",
+        "date_raised": "2026-08-01",
+        "start_date": None,
+        "status": "Not Started",
+        "probability": 4,
+        "impact": 4,
+        "mitigation_plan": "Some plan",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_build_records_computes_priority_and_days_open():
+    entries = [raid_entry(id="T-1", probability=4, impact=4, date_raised="2026-08-01")]
+    [record] = build_records(entries, today=date(2026, 8, 14))
+    assert record["id"] == "T-1"
+    assert record["priority_score"] == 16
+    assert record["priority_bucket"] == "High"
+    assert record["scorable"] is True
+    assert record["days_open"] == 13
+
+
+def test_build_records_uses_effective_status_not_raw_status():
+    # Raw status is "Not Started" but Start Date is set -- build_records
+    # should reflect the US-3 auto-promotion to "In Progress", not the
+    # untouched raw field.
+    entries = [
+        raid_entry(
+            id="T-2",
+            category="Issue",
+            status="Not Started",
+            start_date="2026-07-05",
+            date_raised="2026-07-01",
+            probability=None,
+        )
+    ]
+    [record] = build_records(entries, today=date(2026, 8, 14))
+    assert record["status"] == "In Progress"
+    assert record["days_open"] == 44
+    assert record["scorable"] is False  # blank Probability on an Issue
+
+
+def test_build_records_preserves_entry_order_and_handles_multiple_ids():
+    entries = [raid_entry(id="T-1"), raid_entry(id="T-2"), raid_entry(id="T-3")]
+    records = build_records(entries, today=date(2026, 8, 14))
+    assert [r["id"] for r in records] == ["T-1", "T-2", "T-3"]
+
+
+# ---------------------------------------------------------------------------
+# append_log — the audit trail US-4's "logged with a timestamp" acceptance
+# criterion depends on. Previously untested: nothing proved a second run
+# appends rather than overwrites.
+# ---------------------------------------------------------------------------
+
+def sample_event(event_id="RAID-X"):
+    return {
+        "timestamp": "2026-08-14T00:00:00+00:00",
+        "id": event_id,
+        "category": "Risk",
+        "previous_status": "In Progress",
+        "new_status": "Escalated",
+        "priority_score": 16,
+        "priority_bucket": "High",
+        "days_open": 94,
+        "score_band_threshold": "High",
+        "days_open_threshold": 60,
+    }
+
+
+def test_append_log_writes_one_json_line_per_event(tmp_path):
+    log_path = tmp_path / "escalation_log.jsonl"
+    append_log([sample_event("RAID-A"), sample_event("RAID-B")], str(log_path))
+
+    lines = log_path.read_text().strip().splitlines()
+    assert len(lines) == 2
+    parsed = [json.loads(line) for line in lines]
+    assert [p["id"] for p in parsed] == ["RAID-A", "RAID-B"]
+    assert parsed[0]["new_status"] == "Escalated"
+
+
+def test_append_log_appends_across_calls_without_overwriting(tmp_path):
+    log_path = tmp_path / "escalation_log.jsonl"
+    append_log([sample_event("RAID-A")], str(log_path))
+    append_log([sample_event("RAID-B")], str(log_path))
+
+    lines = log_path.read_text().strip().splitlines()
+    ids = [json.loads(line)["id"] for line in lines]
+    assert ids == ["RAID-A", "RAID-B"]
+
+
+def test_append_log_is_a_no_op_with_no_events_and_creates_no_file(tmp_path):
+    log_path = tmp_path / "escalation_log.jsonl"
+    append_log([], str(log_path))
+    assert not log_path.exists()

@@ -88,10 +88,10 @@ To properly exercise the validation logic in US-2, the mock dataset should delib
 - *Acceptance:* An entry missing an Owner is flagged. A Risk or Issue missing a Mitigation Plan is flagged. Probability may be blank only when Category is Issue; any other missing Probability is flagged.
 
 **US-3:** As a Program Manager, I want Days Open and Status calculated/updated automatically from dates, so tracking doesn't require manual upkeep.
-- *Acceptance:* Days Open = current date minus Date Raised; blank whenever Status is Closed. Status automatically becomes "In Progress" the moment Start Date is set.
+- *Acceptance:* Days Open = current date minus Date Raised; blank whenever Status is Closed. Status automatically becomes "In Progress" the moment Start Date is set. This promotion is one-way and only fires from "Not Started" — it never overwrites Monitoring, Escalated, or Closed, even if Start Date is present, since those later-stage statuses are owned by other stories (US-4, US-7) and shouldn't be silently reset backward.
 
 **US-4:** As a Program Manager, I want the escalation threshold configurable at runtime, so I can adjust it when ad hoc initiatives change what counts as urgent.
-- *Acceptance:* Each time the tool runs its escalation check, it accepts a score-band and days-open threshold as input (not a hardcoded constant). Status auto-updates to "Escalated" for any item breaching the supplied threshold, and the change is logged with a timestamp.
+- *Acceptance:* Each time the tool runs its escalation check, it accepts a score-band and days-open threshold as input (not a hardcoded constant). Status auto-updates to "Escalated" for any item breaching the supplied threshold, and the change is logged with a timestamp. The check is idempotent: an entry already Escalated (or Closed) never re-triggers or re-logs on a later run, even if it still breaches the threshold — this mirrors the idempotency requirement Section 9 states explicitly for US-5's Materialized-Risk conversion.
 
 **US-5:** As a Program Manager, I want a materialized Risk to automatically convert to an Issue, so category discipline is enforced without manual cleanup.
 - *Acceptance:* When a Risk entry's Materialized flag is set to true, its Category updates to Issue in place — same ID, history preserved — rather than a new entry being created.
