@@ -97,7 +97,7 @@ To properly exercise the validation logic in US-2, the mock dataset should delib
 - *Acceptance:* When a Risk entry's Materialized flag is set to true, its Category updates to Issue in place — same ID, history preserved — rather than a new entry being created.
 
 **US-6:** As a Program Manager, I want to trigger the digest manually whenever I need it, rather than on a fixed schedule.
-- *Acceptance:* The tool only generates the top 3-5 priority open items summary, grouped by category, when explicitly invoked by the PM (e.g. a specific command). No automatic or time-based trigger exists in v1.
+- *Acceptance:* The tool only generates the top 3-5 priority open items summary, grouped by category, when explicitly invoked by the PM (e.g. a specific command). No automatic or time-based trigger exists in v1. An unscored-but-valid open item (e.g. an Issue with blank Probability) is eligible for the top 3-5 and ranks ahead of every scored item, ordered by Date Raised among themselves — the same precedence rule as the Sprint Ready pile (US-8), since a live, active problem shouldn't be buried by items that merely scored higher.
 
 **US-7:** As a Program Manager, I want closed items retained rather than deleted, so the historical record stays intact.
 - *Acceptance:* Status can be set to Closed, but no entry is ever removed from the dataset; Closed items are excluded from the active digest but remain present and queryable.
