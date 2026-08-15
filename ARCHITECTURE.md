@@ -174,3 +174,57 @@ flowchart TB
   project.** Neither this repo nor Sprint Planning Automator imports or
   depends on the bridge; the dependency arrow only ever points inward,
   from the bridge to the two projects it connects.
+
+## Integration View (system context)
+
+The file-level and logical views above are meant for someone changing
+code in this repo. This one strips out everything internal — no modules,
+no layers — down to "what is this system, and who does it talk to." It's
+the version to draw on a whiteboard.
+
+```mermaid
+flowchart LR
+    PM(["PM / Team Lead"])
+    LEAD(["Program Leadership"])
+
+    RAID["RAID Log Automator
+    (this system)"]
+
+    STORE[("Pluggable storage
+    SQLite or Excel")]
+
+    SPA["Sprint Planning Automator
+    (another team's system)"]
+
+    DASH["Stakeholder Dashboard
+    (static, GitHub Pages)"]
+
+    PM -- "runs CLI" --> RAID
+    RAID <--> STORE
+    RAID -- "read-only" --> SPA
+    RAID -- "computed snapshot" --> DASH
+    DASH -- "checks status" --> LEAD
+```
+
+**How to narrate this in ~30 seconds:**
+
+1. "This system owns the RAID log — a PM runs it from the CLI, it persists
+   to a storage engine that's swappable without changing any business
+   logic."
+2. "It has exactly two outbound integrations, and both are read-only pulls
+   — nothing external can write back into this system's data."
+3. "One feeds a sprint-planning tool owned by a different team, so risks
+   that are ready to become work items show up there without manual
+   re-entry."
+4. "The other publishes a computed snapshot to a static stakeholder
+   dashboard, so leadership gets a status view without needing CLI access
+   or touching the underlying data."
+5. "The dependency direction only ever points outward from this system —
+   nothing it depends on to do its own job depends on those two
+   integrations existing."
+
+That last point is usually the one worth emphasizing: the integrations
+were added without changing how the core system works, because they
+consume through the same read path (`raid_data`/`raid_store`) or output
+(`raid_tool.py`) that already existed — see the Logical View above for
+why that boundary was there to lean on.
