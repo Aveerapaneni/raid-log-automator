@@ -86,6 +86,75 @@ flowchart LR
     CLI -.computed snapshot.-> DA
 ```
 
+## Logical View
+
+The diagram above shows *which files import which* — useful for tracing a
+change, but it flattens five different responsibilities into one graph.
+This view groups the same system by logical layer instead, to show *why*
+the pieces are separated the way they are.
+
+```mermaid
+flowchart TB
+    SEED["Seed Data
+    (mock JSON, xlsx template)"]
+
+    subgraph PERSIST["Persistence Layer
+    swap storage engines without touching business logic"]
+        direction TB
+        STORE["Storage abstraction
+    (backend picked by file extension)"]
+        TRUTH["Current-truth loader
+    (one read model for every story)"]
+        STORE --> TRUTH
+    end
+
+    subgraph DOMAIN["Domain Logic Layer
+    RAID business rules, one concern per module"]
+        direction TB
+        D1["Scoring & validation"]
+        D2["Status & aging"]
+        D3["Escalation"]
+        D4["Risk-to-issue conversion"]
+        D5["Digest generation"]
+        D6["Retention"]
+        D7["Sprint readiness"]
+    end
+
+    IFACE["Interface Layer
+    unified CLI, one entry point per story"]
+
+    subgraph INTEGRATION["Integration Layer
+    read-only external consumers"]
+        direction TB
+        I1["Sprint Planning bridge"]
+        I2["Stakeholder dashboard"]
+    end
+
+    SEED --> PERSIST
+    PERSIST --> DOMAIN
+    DOMAIN --> IFACE
+    PERSIST -. read-only .-> INTEGRATION
+    IFACE -. computed snapshot .-> INTEGRATION
+```
+
+**Why this grouping, not the file grouping:**
+
+- **Persistence Layer** exists to answer one question — "what does the log
+  currently say?" — the same way regardless of whether the answer comes
+  from SQLite or xlsx. Everything above this line is backend-agnostic; the
+  backend choice is fully absorbed before `raid_data.py` hands data
+  upward.
+- **Domain Logic Layer** is flat and siloed on purpose — each module owns
+  one RAID concern and depends only on the persistence layer, never on a
+  sibling module. That's what let US-11's storage refactor touch the
+  persistence layer alone without rippling into all seven story modules.
+- **Interface Layer** is a thin composition point, not a place where logic
+  lives — it exists so every domain module stays independently runnable
+  (its own `main()`) while still being callable from one CLI.
+- **Integration Layer** sits outside the trust boundary of this repo: it
+  reads through the persistence layer or the CLI's output, never reaches
+  into domain logic directly, and nothing in this repo depends back on it.
+
 ## Notes on reading the diagram
 
 - **Seeds are read-only everywhere.** Neither `raid_mock_data.json` nor
