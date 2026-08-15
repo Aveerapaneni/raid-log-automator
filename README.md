@@ -20,7 +20,7 @@ Full requirements: [`raid-log-automator-PRD.md`](raid-log-automator-PRD.md).
 
 v1's eight user stories, each implemented as its own small, independently
 runnable Python module with a pure-function core and a pytest suite, plus
-US-9 (the first scoped piece of v2 — see PRD Section 13):
+US-9 and US-10 (v2's persistent-storage scope so far — see PRD Section 13):
 
 | Story | Module | What it does |
 |---|---|---|
@@ -33,6 +33,7 @@ US-9 (the first scoped piece of v2 — see PRD Section 13):
 | US-7 | `retention.py` | Entries are never deleted — closing is the only allowed lifecycle transition |
 | US-8 | `sprint_ready.py` | Prioritized, unblocked-only "Sprint Ready" queue |
 | US-9 | `raid_db.py` | Local SQLite persistence — state changes survive across separate runs |
+| US-10 | `raid_db.py` | `reset-db` — explicit, whole-store reset back to the mock dataset |
 
 `raid_tool.py` is the single entry point that wires all of them together as
 subcommands, plus a `report` command that runs the full end-to-end picture in
@@ -86,6 +87,7 @@ python3 raid_tool.py digest --count 5
 python3 raid_tool.py sprint-ready --today 2026-08-14
 python3 raid_tool.py retain --close RAID-001
 python3 raid_tool.py retain --remove RAID-008   # always refused, by design
+python3 raid_tool.py reset-db                   # wipe persisted state, reseed from JSON
 
 # Each module also runs standalone, e.g.:
 python3 score_and_validate.py
@@ -111,8 +113,16 @@ run `escalate` twice with the same thresholds and the second run correctly
 reports zero *new* escalations, since the first run's result already stuck.
 Point `--db` at a different path to run against an isolated copy (useful for
 demos — see `test_persistence_integration.py` for exactly this pattern).
-There's currently no way to reset the database back to the seed short of
-deleting the `.db` file by hand — that's `reset-db`, US-10, not yet built.
+
+```bash
+# Wipe all persisted state and start over from raid_mock_data.json
+python3 raid_tool.py reset-db
+```
+
+`reset-db` (US-10) is the only way persisted state goes away — it never
+happens as a side effect of any other command, and it never touches
+`raid_mock_data.json` itself. Safe to run against a database that doesn't
+exist yet (behaves like a fresh seed).
 
 ### Tests
 
@@ -120,7 +130,7 @@ deleting the `.db` file by hand — that's `reset-db`, US-10, not yet built.
 python3 -m pytest
 ```
 
-202 tests across 10 test files, covering the pure logic functions directly
+209 tests across 10 test files, covering the pure logic functions directly
 (not just the CLI output) — boundary values, invalid ranges, idempotency,
 and every documented edge case from PRD Section 9. `test_persistence_integration.py`
 goes a step further for US-9: it shells out to `raid_tool.py` via

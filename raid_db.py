@@ -127,3 +127,16 @@ def update_fields(db_path, entry_id, **fields):
     with closing(sqlite3.connect(db_path)) as conn:
         conn.execute(f"UPDATE entries SET {assignments} WHERE id = ?", values)
         conn.commit()
+
+
+def reset_db(db_path, seed_path):
+    """US-10: discard all persisted state and reseed fresh from
+    seed_path. This is the one place in the codebase that removes a
+    database file -- an explicit, whole-store reset the PM asked for by
+    name, never a side effect of any other command (Section 13.4). It
+    is unrelated to the never-delete guarantee (US-7), which is about
+    individual entries staying in the dataset, not about this file.
+    seed_path itself is only ever read here, never written to."""
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    ensure_db(db_path, seed_path)

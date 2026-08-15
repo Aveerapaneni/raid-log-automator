@@ -104,6 +104,14 @@ def cmd_sprint_ready(args):
     return 0
 
 
+def cmd_reset_db(args):
+    raid_db.reset_db(args.db, args.data)
+    entries = raid_db.load_entries(args.db)
+    print(f"{args.db}: reset to the {len(entries)} entries in {args.data}.")
+    print("All persisted state (Status/Category/Materialized changes) has been discarded.")
+    return 0
+
+
 def cmd_retain(args):
     dataset, entries = raid_data.load_converted_entries(args.data, args.db)
 
@@ -213,6 +221,10 @@ def build_parser():
     p = sub.add_parser("sprint-ready", help="US-8: build the Sprint Ready pile")
     add_common_args(p)
     p.set_defaults(func=cmd_sprint_ready)
+
+    p = sub.add_parser("reset-db", help="US-10: discard persisted state and reseed from the mock dataset")
+    add_common_args(p, today=False)
+    p.set_defaults(func=cmd_reset_db)
 
     p = sub.add_parser("report", help="Run the full end-to-end picture in one command")
     add_common_args(p)

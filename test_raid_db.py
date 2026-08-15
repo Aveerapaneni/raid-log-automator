@@ -1,13 +1,14 @@
 """Unit tests for US-9's storage layer: raid_db.py."""
 
 import json
+from pathlib import Path
 
 import raid_db
 
 
-def seed_file(tmp_path, entries):
+def seed_file(tmp_path, entries, name="seed.json"):
     data = {"entries": entries}
-    path = tmp_path / "seed.json"
+    path = tmp_path / name
     path.write_text(json.dumps(data))
     return str(path)
 
@@ -193,3 +194,57 @@ def test_update_fields_persists_across_separate_connections(tmp_path):
     # A brand new load_entries call is a brand new sqlite3.connect().
     [e] = raid_db.load_entries(db_path)
     assert e["status"] == "Escalated"
+
+
+# ---------------------------------------------------------------------------
+# reset_db — US-10
+# ---------------------------------------------------------------------------
+
+def test_reset_db_discards_persisted_state(tmp_path):
+    seed = seed_file(tmp_path, [entry(id="RAID-1", status="Not Started", category="Risk")])
+    db_path = str(tmp_path / "test.db")
+    raid_db.ensure_db(db_path, seed)
+    raid_db.update_fields(db_path, "RAID-1", status="Escalated", category="Issue")
+
+    raid_db.reset_db(db_path, seed)
+
+    [e] = raid_db.load_entries(db_path)
+    assert e["status"] == "Not Started"
+    assert e["category"] == "Risk"
+
+
+def test_reset_db_reflects_current_seed_content_not_a_stale_copy(tmp_path):
+    seed = seed_file(tmp_path, [entry(id="RAID-1")])
+    db_path = str(tmp_path / "test.db")
+    raid_db.ensure_db(db_path, seed)
+
+    # Reseed from a *different* seed (simulates the mock dataset having
+    # been edited between runs) -- reset_db must reflect it, unlike
+    # ensure_db, which would silently no-op on an existing db.
+    other_seed = seed_file(tmp_path, [entry(id="RAID-1"), entry(id="RAID-2")], name="seed2.json")
+    raid_db.reset_db(db_path, other_seed)
+
+    ids = {e["id"] for e in raid_db.load_entries(db_path)}
+    assert ids == {"RAID-1", "RAID-2"}
+
+
+def test_reset_db_when_db_does_not_exist_yet_behaves_like_a_fresh_seed(tmp_path):
+    seed = seed_file(tmp_path, [entry(id="RAID-1")])
+    db_path = str(tmp_path / "does_not_exist_yet.db")
+
+    raid_db.reset_db(db_path, seed)  # no prior ensure_db call
+
+    entries = raid_db.load_entries(db_path)
+    assert [e["id"] for e in entries] == ["RAID-1"]
+
+
+def test_reset_db_never_writes_to_the_seed_file(tmp_path):
+    seed = seed_file(tmp_path, [entry(id="RAID-1", status="Not Started")])
+    original_content = Path(seed).read_text()
+    db_path = str(tmp_path / "test.db")
+    raid_db.ensure_db(db_path, seed)
+    raid_db.update_fields(db_path, "RAID-1", status="Escalated")
+
+    raid_db.reset_db(db_path, seed)
+
+    assert Path(seed).read_text() == original_content

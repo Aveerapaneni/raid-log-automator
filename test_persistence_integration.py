@@ -142,3 +142,48 @@ def test_state_is_shared_across_different_subcommands_not_just_the_same_one(tmp_
     status_output, status_code = run("status", "--data", seed, "--db", db, "--today", "2026-08-14")
     assert status_code == 0
     assert "Escalated" in status_output
+
+
+# ---------------------------------------------------------------------------
+# reset-db — US-10
+# ---------------------------------------------------------------------------
+
+def test_reset_db_discards_state_persisted_by_a_separate_earlier_process(tmp_path):
+    seed = make_seed(tmp_path, [entry(id="RAID-X", date_raised="2026-01-01")])
+    db = str(tmp_path / "raid.db")
+
+    escalate_output, escalate_code = run(
+        "escalate", "--data", seed, "--db", db, "--today", "2026-08-14",
+        "--score-band", "High", "--days-open", "1", "--log", str(tmp_path / "log.jsonl"),
+    )
+    assert escalate_code == 0
+    assert "Escalated this run: 1" in escalate_output
+
+    reset_output, reset_code = run("reset-db", "--data", seed, "--db", db)
+    assert reset_code == 0
+    assert "reset to the 1 entries" in reset_output
+
+    status_output, status_code = run("status", "--data", seed, "--db", db, "--today", "2026-08-14")
+    assert status_code == 0
+    assert "Escalated" not in status_output
+    assert "In Progress" in status_output  # back to its original, unescalated status
+
+
+def test_reset_db_never_modifies_the_seed_json_file(tmp_path):
+    seed = make_seed(tmp_path, [entry(id="RAID-X")])
+    original_content = Path(seed).read_text()
+    db = str(tmp_path / "raid.db")
+
+    run("escalate", "--data", seed, "--db", db, "--today", "2026-08-14", "--score-band", "Low", "--days-open", "0", "--log", str(tmp_path / "log.jsonl"))
+    run("reset-db", "--data", seed, "--db", db)
+
+    assert Path(seed).read_text() == original_content
+
+
+def test_reset_db_is_not_an_error_when_the_db_does_not_exist_yet(tmp_path):
+    seed = make_seed(tmp_path, [entry(id="RAID-X")])
+    db = str(tmp_path / "brand_new.db")
+
+    reset_output, reset_code = run("reset-db", "--data", seed, "--db", db)
+    assert reset_code == 0
+    assert "reset to the 1 entries" in reset_output
