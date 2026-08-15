@@ -75,9 +75,10 @@ To properly exercise the validation logic in US-2, the mock dataset should delib
 - Editing the actual `RAID-log-template.xlsx` file directly (v1 uses JSON only)
 
 ### Possible v2 (after v1 works)
-- AI-generated digest narrative via a live API call — only if explicitly revisited as a cost decision, with a separate API key
-- Automating directly against the xlsx template using openpyxl, instead of or alongside JSON
-- A deliberate, explicitly-scoped integration project genuinely connecting this tool with the Sprint Planning Automator, built as its own follow-up
+- ~~Persistence across runs~~ — scoped, see Section 13.
+- AI-generated digest narrative via a live API call — only if explicitly revisited as a cost decision, with a separate API key. Not yet scoped.
+- Automating directly against the xlsx template using openpyxl, instead of or alongside JSON. Not yet scoped.
+- A deliberate, explicitly-scoped integration project genuinely connecting this tool with the Sprint Planning Automator, built as its own follow-up. Not yet scoped — on hold pending a look at that repo's actual schema.
 
 ## 7. User Stories & Acceptance Criteria
 
@@ -142,3 +143,44 @@ To properly exercise the validation logic in US-2, the mock dataset should delib
 - All 8 user stories pass their acceptance criteria.
 - README documents the problem, approach, the data-independence design decision, and how to run it with no API key required.
 - Code is committed incrementally to its own public GitHub repo with a clear history.
+
+**v1 status: complete.** All 8 user stories implemented and tested (170 tests), unified CLI entry point (`raid_tool.py`) built, README written. See Section 13 for the first scoped piece of v2.
+
+## 13. v2 Scope — Persistent Storage
+
+### 13.1 Problem
+v1 treats `raid_mock_data.json` as an immutable snapshot: every command loads it fresh and computes everything from scratch, so nothing a PM does — closing an item, escalating it, materializing a risk — survives past that single run. Running `escalate` twice produces the same result twice instead of a real "already handled" state. This was fine for demonstrating the rule-based logic (v1's actual goal), but not for anyone who'd want to actually use this day to day.
+
+### 13.2 Goal
+Make state changes persist between separate invocations of the tool, so the log reflects its current true state rather than resetting to the original mock snapshot every run.
+
+### 13.3 Design Decisions
+- **Local-only, not shared.** The persistent store (`raid_log.db`, SQLite) belongs to this project alone. It creates no dependency on, and no shared access with, the Sprint Planning Automator repo — a shared database would violate Section 4.1/4.3's independence guarantee. If a future integration project (still unscoped, see Section 6) wants to correlate data across the two tools, it will read from each project's own store via a separate connector, not through one shared database.
+- **`raid_mock_data.json` stays the canonical seed, not a live file.** The tool never overwrites it. It remains the portable, independently-reviewable mock dataset described in Section 4.1 — what a portfolio reviewer sees without running any code — and is also the source used to (re-)seed the database.
+- **No new cost.** `sqlite3` is part of Python's standard library — no external service, no API, no separate install. This doesn't touch the zero-cost constraint from Section 4.2.
+- **Calculated fields are still never stored.** Priority and Days Open remain computed fresh on every read from Probability/Impact/Date Raised, exactly as in v1 (Section 5) — storing them would risk staleness (Days Open would be wrong the moment a day passes). Only the fields v1's user stories actually transition — Status, Category, Materialized — are ever written back by the tool.
+
+### 13.4 Storage
+- `raid_log.db`, auto-created and seeded from `raid_mock_data.json` the first time any command runs against a path where it doesn't yet exist.
+- One `entries` table, columns matching the raw/input fields from the Section 5 schema (`dependency_links` and `blocked_by` stored as JSON-encoded text, since SQLite has no native array type).
+- A `reset-db` command re-seeds the database from `raid_mock_data.json`, discarding all persisted state. This is an explicit, clearly-named action only — never a side effect of a normal run, mirroring the same "explicit refusal/action over silent surprise" philosophy already used for escalation thresholds (US-4) and entry removal (US-7).
+
+### 13.5 User Stories & Acceptance Criteria
+
+**US-9:** As a Program Manager, I want the tool's state changes to persist between separate runs, so a status I set, an escalation that fired, or a risk that materialized stays that way the next time I open the tool — rather than resetting to the original mock data every time.
+- *Acceptance:* Every mutating operation already defined in v1 — Status auto-transition (US-3), Escalation (US-4), Materialized-Risk conversion (US-5), and Close (US-7) — writes its result to `raid_log.db`, not just to an in-memory copy for that run. Running the same command twice in two separate invocations reflects the first run's result on the second (e.g. an already-Escalated entry stays Escalated and is not re-logged, proving the existing idempotency guarantee — previously only provable within a single run — now holds across real separate process invocations too).
+
+**US-10:** As a Program Manager, I want an explicit way to reset the database back to the original mock dataset, so I can start over for a demo or after testing without hand-editing anything.
+- *Acceptance:* A dedicated command (`raid_tool.py reset-db`) re-seeds `raid_log.db` from `raid_mock_data.json`, discarding all persisted state. This never happens as a side effect of any other command. `raid_mock_data.json` itself is never modified by this or any other operation.
+
+### 13.6 Edge Cases
+- Command run before `raid_log.db` exists → auto-created and seeded from `raid_mock_data.json`, not an error.
+- `reset-db` run when `raid_log.db` doesn't exist yet → same as a fresh seed; not an error.
+- The "never delete" guarantee (US-7) extends to the database layer: `remove_entry` refuses regardless of persistence, and no code path in this scope ever issues a `DELETE` against the `entries` table.
+- Concurrent runs (two terminals writing at once) are out of scope — this remains a single-PM, single-session CLI tool; SQLite's default locking behavior is sufficient without any special handling.
+
+### 13.7 Definition of Done (v2 — persistence)
+- `raid_log.db` created and seeded automatically on first use.
+- US-9 and US-10 acceptance criteria pass, with the idempotency guarantee demonstrated across two genuinely separate process invocations (not just two calls within one Python process, as v1's tests necessarily did).
+- All v1 tests and behavior continue to pass unchanged — persistence is additive, not a rewrite of v1's logic.
+- README updated with the new storage model and the `reset-db` command.
