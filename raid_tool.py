@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """RAID Log Automator — single CLI entry point.
 
-Wraps the eight user-story modules (US-1 through US-8) as subcommands of
+Wraps the ten user-story modules (US-1 through US-10) as subcommands of
 one command, per Section 12's Definition of Done ("script runs end-to-end
 against the independent mock dataset"). Each subcommand is a thin
 dispatch to that story's own module -- the logic lives there; this file
-only wires up shared options (--data, --today) and routing, and applies
-the US-5 Materialized-Risk -> Issue conversion once up front so every
-subcommand sees a consistent view of the data (see raid_data.py).
+only wires up shared options (--data, --db, --today) and routing.
+
+Per Section 13 (US-9), state lives in a local SQLite database
+(raid_log.db by default), auto-created and seeded from raid_mock_data.json
+on first use. raid_mock_data.json itself is never written to.
 
 Run `python3 raid_tool.py <subcommand> --help` for a given subcommand's
 own options. `report` runs the full end-to-end picture in one command;
@@ -25,6 +27,7 @@ import digest as dg
 import escalation as esc
 import materialize_conversion as mc
 import raid_data
+import raid_db
 import retention as rt
 import score_and_validate as sv
 import sprint_ready as sr
@@ -32,6 +35,7 @@ import sprint_ready as sr
 
 def add_common_args(parser, today=True):
     parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
+    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
     if today:
         parser.add_argument("--today", default=None, help="Override 'today' as YYYY-MM-DD")
 
@@ -41,7 +45,7 @@ def resolve_today(args):
 
 
 def cmd_score(args):
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
     results = sv.process(entries)
     sv.print_report(results)
     sv.self_check(dataset, results)
@@ -49,8 +53,7 @@ def cmd_score(args):
 
 
 def cmd_status(args):
-    dataset, entries = raid_data.load_converted_entries(args.data)
-    results = ds.process(entries, today=resolve_today(args))
+    dataset, results = ds.load_and_process(args.db, args.data, today=resolve_today(args))
     ds.print_report(results)
     ds.self_check(dataset, results)
     return 0
@@ -64,12 +67,13 @@ def cmd_escalate(args):
         print(f"Refusing to run escalation check: {exc}", file=sys.stderr)
         return 1
 
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
     records = esc.build_records(entries, today=resolve_today(args))
     timestamp = datetime.now(timezone.utc).isoformat()
     updated_records, events = esc.apply_escalations(records, score_band, days_open_threshold, timestamp=timestamp)
 
     esc.print_report(records, events, score_band, days_open_threshold)
+    esc.persist_escalations(args.db, events)
     esc.append_log(events, args.log_path)
     if events:
         print(f"\nLogged {len(events)} escalation(s) to {args.log_path}")
@@ -77,15 +81,14 @@ def cmd_escalate(args):
 
 
 def cmd_materialize(args):
-    dataset = raid_data.load_dataset(args.data)
-    updated, events = mc.process(dataset["entries"])
+    dataset, updated, events = mc.load_and_convert(args.db, args.data)
     mc.print_report(events)
-    mc.self_check(dataset, events)
+    mc.self_check(dataset, updated, events)
     return 0
 
 
 def cmd_digest(args):
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
     items = dg.select_top_items(entries, count=args.count, today=resolve_today(args))
     label = args.today or "today"
     print(dg.format_digest(items, label))
@@ -94,7 +97,7 @@ def cmd_digest(args):
 
 
 def cmd_sprint_ready(args):
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
     pile = sr.build_pile(entries, today=resolve_today(args))
     sr.print_report(pile)
     sr.self_check(dataset, pile)
@@ -102,11 +105,12 @@ def cmd_sprint_ready(args):
 
 
 def cmd_retain(args):
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
 
     if args.close:
         try:
             entries = rt.close_entry(entries, args.close)
+            raid_db.update_fields(args.db, args.close, status=rt.CLOSED)
             print(f"{args.close}: Status set to Closed.")
         except KeyError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -133,7 +137,6 @@ def cmd_retain(args):
 def cmd_report(args):
     """The full end-to-end picture in one command (Section 12 DoD)."""
     today = resolve_today(args)
-    dataset, entries = raid_data.load_converted_entries(args.data)
 
     def header(title):
         print()
@@ -142,17 +145,20 @@ def cmd_report(args):
         print("#" * 70)
 
     header("1. Materialized-Risk conversion (US-5)")
-    _, mc_events = mc.process(dataset["entries"])
+    _, _, mc_events = mc.load_and_convert(args.db, args.data)
     mc.print_report(mc_events)
 
     header("2. Priority scoring & validation (US-1 / US-2)")
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
     score_results = sv.process(entries)
     sv.print_report(score_results)
 
     header("3. Days Open & Status (US-3)")
-    ds.print_report(ds.process(entries, today=today))
+    _, status_results = ds.load_and_process(args.db, args.data, today=today)
+    ds.print_report(status_results)
 
     header("4. Sprint Ready pile (US-8)")
+    _, entries = raid_data.load_converted_entries(args.data, args.db)
     sr.print_report(sr.build_pile(entries, today=today))
 
     header(f"5. Digest — top {args.count} items (US-6)")
@@ -170,7 +176,7 @@ def cmd_report(args):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="raid_tool.py",
-        description="RAID Log Automator — one CLI for all 8 user stories.",
+        description="RAID Log Automator — one CLI for all user stories.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -200,7 +206,7 @@ def build_parser():
 
     p = sub.add_parser("retain", help="US-7: close/attempt-remove and query entries")
     add_common_args(p, today=False)
-    p.add_argument("--close", metavar="ID", help="Set an entry's Status to Closed (in-memory only)")
+    p.add_argument("--close", metavar="ID", help="Set an entry's Status to Closed (persisted)")
     p.add_argument("--remove", metavar="ID", help="Attempt to remove an entry — always refused")
     p.set_defaults(func=cmd_retain)
 

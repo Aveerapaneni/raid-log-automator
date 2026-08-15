@@ -22,6 +22,7 @@ from collections import Counter
 
 import days_and_status as ds
 import raid_data
+import raid_db
 import score_and_validate as sv
 
 CLOSED = "Closed"
@@ -155,12 +156,13 @@ def self_check(dataset, pile):
 def main():
     parser = argparse.ArgumentParser(description="US-8: build the Sprint Ready pile.")
     parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
+    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
     parser.add_argument("--today", default=None, help="Override 'today' as YYYY-MM-DD")
     args = parser.parse_args()
 
     today = ds.parse_date(args.today) if args.today else None
 
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
 
     pile = build_pile(entries, today=today)
     print_report(pile)

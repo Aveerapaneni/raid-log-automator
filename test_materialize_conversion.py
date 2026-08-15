@@ -5,9 +5,19 @@ dataset that already went through one conversion pass must not create a
 duplicate or re-fire the conversion.
 """
 
+import json
+
 import pytest
 
-from materialize_conversion import convert_entry, is_materialized_risk, process
+import raid_db
+from materialize_conversion import (
+    convert_entry,
+    is_materialized_risk,
+    load_and_convert,
+    persist_conversions,
+    process,
+    self_check,
+)
 
 
 def entry(**overrides):
@@ -126,3 +136,94 @@ def test_reprocessing_never_grows_the_dataset_across_many_runs():
         current, _ = process(current)
     assert len(current) == 1
     assert current[0]["category"] == "Issue"
+
+
+# ---------------------------------------------------------------------------
+# persist_conversions / load_and_convert — US-9 persistence
+# ---------------------------------------------------------------------------
+
+def db_entry(**overrides):
+    base = {
+        "id": "RAID-X",
+        "category": "Risk",
+        "owner": "Test Owner",
+        "mitigation_plan": "A plan",
+        "probability": 3,
+        "impact": 4,
+        "date_raised": "2026-01-01",
+        "start_date": None,
+        "status": "Monitoring",
+        "materialized": True,
+        "dependency_links": [],
+        "blocked_by": [],
+        "target_date": "2026-06-01",
+        "last_updated": "2026-01-01",
+    }
+    base.update(overrides)
+    return base
+
+
+def write_seed(tmp_path, entries):
+    path = tmp_path / "seed.json"
+    path.write_text(json.dumps({"entries": entries}))
+    return str(path)
+
+
+def test_persist_conversions_writes_category_to_db(tmp_path):
+    seed = write_seed(tmp_path, [db_entry()])
+    db = str(tmp_path / "test.db")
+    raid_db.ensure_db(db, seed)
+
+    events = [{"id": "RAID-X", "previous_category": "Risk", "new_category": "Issue"}]
+    persist_conversions(db, events)
+
+    [stored] = raid_db.load_entries(db)
+    assert stored["category"] == "Issue"
+
+
+def test_persist_conversions_is_a_no_op_with_no_events(tmp_path):
+    seed = write_seed(tmp_path, [db_entry(category="Risk", materialized=False)])
+    db = str(tmp_path / "test.db")
+    raid_db.ensure_db(db, seed)
+
+    persist_conversions(db, [])
+
+    [stored] = raid_db.load_entries(db)
+    assert stored["category"] == "Risk"
+
+
+def test_load_and_convert_persists_and_reports_only_new_conversions_this_run(tmp_path):
+    seed = write_seed(tmp_path, [db_entry(id="RAID-X", materialized=True)])
+    db = str(tmp_path / "test.db")
+
+    dataset, entries, events = load_and_convert(db, seed)
+    assert [e["id"] for e in events] == ["RAID-X"]
+    assert entries[0]["category"] == "Issue"
+
+    # Second call against the same db: already converted, so no new events
+    # this run -- even though the entry itself remains an Issue.
+    dataset2, entries2, events2 = load_and_convert(db, seed)
+    assert events2 == []
+    assert entries2[0]["category"] == "Issue"
+
+
+def test_self_check_passes_on_a_second_run_even_though_events_are_now_empty(tmp_path, capsys):
+    # Regression test for a real bug: self_check used to assert the
+    # expected id appeared in `events`, which only holds on the very
+    # first run against a fresh db. Once persisted (US-9), the second
+    # run correctly reports zero new events -- self_check must judge by
+    # final Category, not by whether *this* run did the converting.
+    dataset = {
+        "_schema_notes": {"known_test_cases": {"materialized_risk_should_convert_to_issue": ["RAID-X"]}}
+    }
+    seed = write_seed(tmp_path, [db_entry(id="RAID-X", materialized=True)])
+    db = str(tmp_path / "test.db")
+
+    _, first_entries, first_events = load_and_convert(db, seed)
+    self_check(dataset, first_entries, first_events)
+    assert "FAIL" not in capsys.readouterr().out
+
+    _, second_entries, second_events = load_and_convert(db, seed)
+    assert second_events == []  # already converted
+    self_check(dataset, second_entries, second_events)
+    assert "FAIL" not in capsys.readouterr().out

@@ -18,8 +18,9 @@ Full requirements: [`raid-log-automator-PRD.md`](raid-log-automator-PRD.md).
 
 ## Approach
 
-Eight user stories, each implemented as its own small, independently
-runnable Python module with a pure-function core and a pytest suite:
+v1's eight user stories, each implemented as its own small, independently
+runnable Python module with a pure-function core and a pytest suite, plus
+US-9 (the first scoped piece of v2 — see PRD Section 13):
 
 | Story | Module | What it does |
 |---|---|---|
@@ -31,14 +32,17 @@ runnable Python module with a pure-function core and a pytest suite:
 | US-6 | `digest.py` | Manually-triggered top 3-5 highest-priority open items, grouped by category |
 | US-7 | `retention.py` | Entries are never deleted — closing is the only allowed lifecycle transition |
 | US-8 | `sprint_ready.py` | Prioritized, unblocked-only "Sprint Ready" queue |
+| US-9 | `raid_db.py` | Local SQLite persistence — state changes survive across separate runs |
 
-`raid_tool.py` is the single entry point that wires all eight together as
+`raid_tool.py` is the single entry point that wires all of them together as
 subcommands, plus a `report` command that runs the full end-to-end picture in
-one shot. `raid_data.py` is a small shared helper that every module's
-`main()` uses to load the dataset and apply the US-5 conversion before doing
-its own work, so a materialized Risk is treated as an Issue consistently
-everywhere — not just when `materialize_conversion.py` happens to be the
-script that ran.
+one shot. `raid_data.py` is a small shared helper most modules' `main()`
+uses to load current entries from the database (auto-seeding it from the
+JSON on first use) with the two automatic, rule-based transitions — the US-5
+conversion and the US-3 Status promotion — already applied and persisted, so
+a materialized Risk reads as an Issue, and a started item reads as "In
+Progress," consistently everywhere, regardless of which command happened to
+trigger the transition first.
 
 Nothing in this project calls out to a live AI/API at runtime. Any
 AI-assisted text (e.g. writing a narrative on top of the digest's structured
@@ -66,7 +70,8 @@ Section 4 for the full writeup):
 ## Running it
 
 No API key, no external services, no network calls. Just Python 3 and
-`pytest` (for the test suite).
+`pytest` (for the test suite) — `sqlite3` is part of the standard library,
+so persistence needs no extra install either.
 
 ```bash
 # The full end-to-end picture in one command
@@ -94,15 +99,33 @@ also prints a self-check against a set of known test cases baked into
 the deliberately-planted edge cases (missing owners, blocked items, a
 materialized risk, a true priority tie, etc.) are being handled correctly.
 
+### Persistence (US-9)
+
+The first command you run creates `raid_log.db` (gitignored — it's local,
+per-machine runtime state, not something to commit) and seeds it from
+`raid_mock_data.json`. `raid_mock_data.json` itself is never written to; it
+stays the canonical, portable mock dataset. From then on, every command
+reads and writes that database, so a status promotion, an escalation, a
+materialized-Risk conversion, or a close survives across separate runs —
+run `escalate` twice with the same thresholds and the second run correctly
+reports zero *new* escalations, since the first run's result already stuck.
+Point `--db` at a different path to run against an isolated copy (useful for
+demos — see `test_persistence_integration.py` for exactly this pattern).
+There's currently no way to reset the database back to the seed short of
+deleting the `.db` file by hand — that's `reset-db`, US-10, not yet built.
+
 ### Tests
 
 ```bash
 python3 -m pytest
 ```
 
-170 tests across 8 test files, covering the pure logic functions directly
+202 tests across 10 test files, covering the pure logic functions directly
 (not just the CLI output) — boundary values, invalid ranges, idempotency,
-and every documented edge case from PRD Section 9.
+and every documented edge case from PRD Section 9. `test_persistence_integration.py`
+goes a step further for US-9: it shells out to `raid_tool.py` via
+`subprocess` so the idempotency guarantee is proven across genuinely
+separate process invocations, not just two calls within one Python process.
 
 ## Data
 

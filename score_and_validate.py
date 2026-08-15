@@ -15,6 +15,7 @@ import argparse
 import sys
 
 import raid_data
+import raid_db
 
 MITIGATION_REQUIRED_CATEGORIES = {"Risk", "Issue"}
 PROBABILITY_OPTIONAL_CATEGORY = "Issue"
@@ -184,9 +185,10 @@ def self_check(entries, results):
 def main():
     parser = argparse.ArgumentParser(description="US-1/US-2: score and validate RAID log entries.")
     parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
+    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
     args = parser.parse_args()
 
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
 
     results = process(entries)
     print_report(results)

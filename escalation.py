@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 
 import days_and_status as ds
 import raid_data
+import raid_db
 import score_and_validate as sv
 
 PRIORITY_RANK = {"Low": 1, "Medium": 2, "High": 3}
@@ -121,6 +122,16 @@ def resolve_days_open_threshold(value, prompt=input):
     return value
 
 
+def persist_escalations(db_path, events):
+    """Writes back Status='Escalated' for each escalation event, so it
+    survives to the next run (US-9) -- which is what makes the existing
+    idempotency guard in breaches_threshold() (skip anything already
+    Escalated) actually mean something across separate invocations,
+    not just within one."""
+    for event in events:
+        raid_db.update_fields(db_path, event["id"], status=ESCALATED)
+
+
 def append_log(events, log_path):
     if not events:
         return
@@ -153,6 +164,7 @@ def print_report(records, events, score_band, days_open_threshold):
 def main():
     parser = argparse.ArgumentParser(description="US-4: runtime-configurable escalation check.")
     parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
+    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
     parser.add_argument("--score-band", dest="score_band", default=None, choices=list(PRIORITY_RANK))
     parser.add_argument("--days-open", dest="days_open", default=None, type=int)
     parser.add_argument("--today", default=None, help="Override 'today' as YYYY-MM-DD")
@@ -168,13 +180,14 @@ def main():
 
     today = ds.parse_date(args.today) if args.today else None
 
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
 
     records = build_records(entries, today=today)
     timestamp = datetime.now(timezone.utc).isoformat()
     updated_records, events = apply_escalations(records, score_band, days_open_threshold, timestamp=timestamp)
 
     print_report(records, events, score_band, days_open_threshold)
+    persist_escalations(args.db, events)
     append_log(events, args.log_path)
     if events:
         print(f"\nLogged {len(events)} escalation(s) to {args.log_path}")

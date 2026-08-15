@@ -7,11 +7,17 @@ flag itself) preserved as history. Idempotent by construction: once an
 entry's Category is Issue, it no longer matches a Risk and is left alone
 on any later run, so re-processing never creates a duplicate or re-fires
 the conversion (Section 9).
+
+Per Section 13 (US-9), a converted Category is persisted to raid_log.db
+so the conversion survives across separate process invocations, not just
+within one run's in-memory copy.
 """
 
 import argparse
 import json
 import sys
+
+import raid_db
 
 RISK = "Risk"
 ISSUE = "Issue"
@@ -47,6 +53,30 @@ def process(entries):
     return updated, events
 
 
+def persist_conversions(db_path, events):
+    """Writes back the Category update for each conversion event, so it
+    survives to the next run (US-9)."""
+    for event in events:
+        raid_db.update_fields(db_path, event["id"], category=event["new_category"])
+
+
+def load_and_convert(db_path, seed_path):
+    """Loads live entries from the database (auto-seeding from
+    seed_path if needed), applies the conversion, persists any new
+    conversions, and returns (dataset, converted_entries, events) --
+    `events` reflects only what changed in *this* call, which is what a
+    caller reporting "conversions this run" needs (unlike the shared
+    raid_data.load_converted_entries(), which just wants current
+    entries and doesn't care what changed when)."""
+    raid_db.ensure_db(db_path, seed_path)
+    with open(seed_path) as f:
+        dataset = json.load(f)
+    entries = raid_db.load_entries(db_path)
+    updated, events = process(entries)
+    persist_conversions(db_path, events)
+    return dataset, updated, events
+
+
 def print_report(events):
     print(f"Materialized-Risk conversions this run: {len(events)}")
     for e in events:
@@ -55,31 +85,33 @@ def print_report(events):
         print("  (none)")
 
 
-def self_check(dataset, events):
+def self_check(dataset, entries, events):
+    """Checks final Category, not `events`: once persisted (US-9), a
+    conversion detected on an earlier run correctly produces zero events
+    on this run -- it already happened. What must hold regardless of
+    which run did the converting is that these entries end up "Issue"."""
     notes = dataset.get("_schema_notes", {}).get("known_test_cases", {})
     expected = set(notes.get("materialized_risk_should_convert_to_issue", []))
     if not expected:
         return
-    actual = {e["id"] for e in events}
+    now_issue = {e["id"] for e in entries if e["category"] == ISSUE}
     print()
     print("Self-check against _schema_notes.known_test_cases:")
-    if expected == actual:
-        print(f"  OK   materialized_risk_should_convert_to_issue: {sorted(expected)}")
+    if expected <= now_issue:
+        print(f"  OK   materialized_risk_should_convert_to_issue (now Issue): {sorted(expected)}")
     else:
-        print(f"  FAIL expected {sorted(expected)}, got {sorted(actual)}")
+        print(f"  FAIL expected {sorted(expected)} to be Issue, missing: {sorted(expected - now_issue)}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="US-5: convert materialized Risks to Issues.")
     parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
+    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
     args = parser.parse_args()
 
-    with open(args.data) as f:
-        dataset = json.load(f)
-
-    updated, events = process(dataset["entries"])
+    dataset, updated, events = load_and_convert(args.db, args.data)
     print_report(events)
-    self_check(dataset, events)
+    self_check(dataset, updated, events)
     return 0
 
 

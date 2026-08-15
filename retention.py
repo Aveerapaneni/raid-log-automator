@@ -8,12 +8,17 @@ of its status (Section 9). Closed entries stay present and queryable —
 digest.py (US-6) and sprint_ready.py (US-8) already exclude them from
 their *active* views, but neither of them, nor anything here, ever
 removes an entry from the dataset itself.
+
+Per Section 13 (US-9), closing an entry is persisted to raid_log.db so
+it survives across separate process invocations, not just within one
+run's in-memory copy.
 """
 
 import argparse
 import sys
 
 import raid_data
+import raid_db
 
 CLOSED = "Closed"
 
@@ -86,15 +91,17 @@ def self_check(dataset, entries):
 def main():
     parser = argparse.ArgumentParser(description="US-7: closed-entry retention.")
     parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
-    parser.add_argument("--close", metavar="ID", help="Set an entry's Status to Closed (in-memory only; does not persist)")
+    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
+    parser.add_argument("--close", metavar="ID", help="Set an entry's Status to Closed (persisted)")
     parser.add_argument("--remove", metavar="ID", help="Attempt to remove an entry — always refused")
     args = parser.parse_args()
 
-    dataset, entries = raid_data.load_converted_entries(args.data)
+    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
 
     if args.close:
         try:
             entries = close_entry(entries, args.close)
+            raid_db.update_fields(args.db, args.close, status=CLOSED)
             print(f"{args.close}: Status set to Closed.")
         except KeyError as exc:
             print(f"Error: {exc}", file=sys.stderr)

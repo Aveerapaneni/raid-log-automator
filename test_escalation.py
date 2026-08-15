@@ -13,11 +13,13 @@ from datetime import date
 
 import pytest
 
+import raid_db
 from escalation import (
     append_log,
     apply_escalations,
     breaches_threshold,
     build_records,
+    persist_escalations,
     resolve_days_open_threshold,
     resolve_score_band,
 )
@@ -285,3 +287,68 @@ def test_append_log_is_a_no_op_with_no_events_and_creates_no_file(tmp_path):
     log_path = tmp_path / "escalation_log.jsonl"
     append_log([], str(log_path))
     assert not log_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# persist_escalations — US-9 persistence
+# ---------------------------------------------------------------------------
+
+def db_entry(**overrides):
+    base = {
+        "id": "RAID-X",
+        "category": "Risk",
+        "owner": "Test Owner",
+        "mitigation_plan": "A plan",
+        "probability": 4,
+        "impact": 4,
+        "date_raised": "2026-01-01",
+        "start_date": "2026-01-02",
+        "status": "In Progress",
+        "materialized": False,
+        "dependency_links": [],
+        "blocked_by": [],
+        "target_date": "2026-06-01",
+        "last_updated": "2026-01-01",
+    }
+    base.update(overrides)
+    return base
+
+
+def write_seed(tmp_path, entries):
+    path = tmp_path / "seed.json"
+    path.write_text(json.dumps({"entries": entries}))
+    return str(path)
+
+
+def test_persist_escalations_writes_status_escalated(tmp_path):
+    seed = write_seed(tmp_path, [db_entry(id="RAID-X")])
+    db = str(tmp_path / "test.db")
+    raid_db.ensure_db(db, seed)
+
+    persist_escalations(db, [sample_event("RAID-X")])
+
+    [stored] = raid_db.load_entries(db)
+    assert stored["status"] == "Escalated"
+
+
+def test_persist_escalations_is_a_no_op_with_no_events(tmp_path):
+    seed = write_seed(tmp_path, [db_entry(id="RAID-X", status="In Progress")])
+    db = str(tmp_path / "test.db")
+    raid_db.ensure_db(db, seed)
+
+    persist_escalations(db, [])
+
+    [stored] = raid_db.load_entries(db)
+    assert stored["status"] == "In Progress"
+
+
+def test_persist_escalations_only_touches_named_entries(tmp_path):
+    seed = write_seed(tmp_path, [db_entry(id="RAID-X"), db_entry(id="RAID-Y")])
+    db = str(tmp_path / "test.db")
+    raid_db.ensure_db(db, seed)
+
+    persist_escalations(db, [sample_event("RAID-X")])
+
+    by_id = {e["id"]: e for e in raid_db.load_entries(db)}
+    assert by_id["RAID-X"]["status"] == "Escalated"
+    assert by_id["RAID-Y"]["status"] == "In Progress"
