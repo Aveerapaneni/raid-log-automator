@@ -4,6 +4,8 @@
 **Status:** Draft v1
 **Last updated:** August 14, 2026
 
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for a diagram of the system as built and how its design changed across the v2 sections below.
+
 ## 1. Problem Statement
 Risks, assumptions, issues, and dependencies are usually tracked manually in a spreadsheet, reviewed inconsistently, and rely on the PM remembering to enforce discipline (naming an owner, requiring a mitigation plan, converting a materialized risk into an issue, escalating aging items). This project automates the mechanical, rule-based parts of maintaining a RAID log — scoring, validation, aging, escalation, category discipline, and readiness queuing — using mock data, while the PM and stakeholders remain the decision-makers on what actually gets done about each item.
 

@@ -15,6 +15,8 @@ readiness queuing — using mock data, while the PM and stakeholders remain the
 decision-makers on what actually gets done about each item.
 
 Full requirements: [`raid-log-automator-PRD.md`](raid-log-automator-PRD.md).
+How the system's design changed across v1 and v2, with a diagram of the
+current architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 **[View the live stakeholder dashboard →](https://aveerapaneni.github.io/raid-log-automator/)**
 A status console computed from the real mock data — leads with an
