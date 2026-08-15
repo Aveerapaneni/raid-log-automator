@@ -17,7 +17,7 @@ import argparse
 import json
 import sys
 
-import raid_db
+import raid_store
 
 RISK = "Risk"
 ISSUE = "Issue"
@@ -57,7 +57,7 @@ def persist_conversions(db_path, events):
     """Writes back the Category update for each conversion event, so it
     survives to the next run (US-9)."""
     for event in events:
-        raid_db.update_fields(db_path, event["id"], category=event["new_category"])
+        raid_store.update_fields(db_path, event["id"], category=event["new_category"])
 
 
 def load_and_convert(db_path, seed_path):
@@ -68,10 +68,9 @@ def load_and_convert(db_path, seed_path):
     caller reporting "conversions this run" needs (unlike the shared
     raid_data.load_converted_entries(), which just wants current
     entries and doesn't care what changed when)."""
-    raid_db.ensure_db(db_path, seed_path)
-    with open(seed_path) as f:
-        dataset = json.load(f)
-    entries = raid_db.load_entries(db_path)
+    raid_store.ensure_db(db_path, seed_path)
+    dataset = {} if raid_store.is_xlsx(seed_path) else json.load(open(seed_path))
+    entries = raid_store.load_entries(db_path)
     updated, events = process(entries)
     persist_conversions(db_path, events)
     return dataset, updated, events
@@ -105,11 +104,12 @@ def self_check(dataset, entries, events):
 
 def main():
     parser = argparse.ArgumentParser(description="US-5: convert materialized Risks to Issues.")
-    parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
-    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
+    parser.add_argument("--data", default=None, help="Path to the mock RAID dataset seed (JSON or xlsx template)")
+    parser.add_argument("--db", default=raid_store.DEFAULT_DB_PATH, help="Path to the persistent store (.db or .xlsx)")
     args = parser.parse_args()
 
-    dataset, updated, events = load_and_convert(args.db, args.data)
+    seed_path = args.data or raid_store.default_seed_path(args.db)
+    dataset, updated, events = load_and_convert(args.db, seed_path)
     print_report(events)
     self_check(dataset, updated, events)
     return 0

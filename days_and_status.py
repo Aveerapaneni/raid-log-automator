@@ -20,7 +20,7 @@ import sys
 from datetime import date, datetime
 
 import materialize_conversion as mc
-import raid_db
+import raid_store
 
 NOT_STARTED = "Not Started"
 IN_PROGRESS = "In Progress"
@@ -74,7 +74,7 @@ def persist_status_promotions(db_path, results):
     it survives to the next run (US-9)."""
     for r in results:
         if r["status_changed"]:
-            raid_db.update_fields(db_path, r["id"], status=r["status"])
+            raid_store.update_fields(db_path, r["id"], status=r["status"])
 
 
 def load_and_process(db_path, seed_path, today=None):
@@ -83,10 +83,9 @@ def load_and_process(db_path, seed_path, today=None):
     consistent Category display and persists any new conversions,
     computes Days Open / Status for *this* run, and persists any new
     Status promotions. Returns (dataset, results)."""
-    raid_db.ensure_db(db_path, seed_path)
-    with open(seed_path) as f:
-        dataset = json.load(f)
-    entries = raid_db.load_entries(db_path)
+    raid_store.ensure_db(db_path, seed_path)
+    dataset = {} if raid_store.is_xlsx(seed_path) else json.load(open(seed_path))
+    entries = raid_store.load_entries(db_path)
     converted, conversion_events = mc.process(entries)
     mc.persist_conversions(db_path, conversion_events)
 
@@ -154,14 +153,15 @@ def self_check(dataset, results):
 
 def main():
     parser = argparse.ArgumentParser(description="US-3: Days Open and Status auto-transition.")
-    parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
-    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
+    parser.add_argument("--data", default=None, help="Path to the mock RAID dataset seed (JSON or xlsx template)")
+    parser.add_argument("--db", default=raid_store.DEFAULT_DB_PATH, help="Path to the persistent store (.db or .xlsx)")
     parser.add_argument("--today", default=None, help="Override 'today' as YYYY-MM-DD (defaults to the real current date)")
     args = parser.parse_args()
 
     today = parse_date(args.today) if args.today else None
+    seed_path = args.data or raid_store.default_seed_path(args.db)
 
-    dataset, results = load_and_process(args.db, args.data, today=today)
+    dataset, results = load_and_process(args.db, seed_path, today=today)
     print_report(results)
     self_check(dataset, results)
     return 0

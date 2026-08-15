@@ -77,7 +77,7 @@ To properly exercise the validation logic in US-2, the mock dataset should delib
 ### Possible v2 (after v1 works)
 - ~~Persistence across runs~~ — scoped, see Section 13.
 - AI-generated digest narrative via a live API call — only if explicitly revisited as a cost decision, with a separate API key. Not yet scoped.
-- Automating directly against the xlsx template using openpyxl, instead of or alongside JSON. Not yet scoped.
+- ~~Automating directly against the xlsx template using openpyxl~~ — scoped, see Section 14.
 - A deliberate, explicitly-scoped integration project genuinely connecting this tool with the Sprint Planning Automator, built as its own follow-up. Not yet scoped — on hold pending a look at that repo's actual schema.
 
 ## 7. User Stories & Acceptance Criteria
@@ -190,3 +190,49 @@ Make state changes persist between separate invocations of the tool, so the log 
 **US-10 status: complete.** `raid_db.reset_db()` added, exposed as `raid_tool.py reset-db`. It's the only code path in the project that removes a database file — never a side effect of any other command, never touches `raid_mock_data.json`, and is a no-op-safe fresh seed when the database doesn't exist yet. 209 tests passing across 10 test files (up from 202), including 3 new cross-process integration tests proving reset-db actually discards state a separate earlier process persisted.
 
 **Section 13 v2 scope (persistent storage): fully complete.**
+
+## 14. v2 Scope — xlsx Automation
+
+### 14.1 Problem
+Real PMs track RAID logs in Excel, not JSON or a CLI. `RAID-log-template.xlsx` already exists in this repo as a real-world artifact — with its own real-looking sample rows (R-001, A-002, I-003, ...) — but nothing in the codebase reads or writes it. It's currently inert.
+
+### 14.2 Goal
+The same automation logic that already works against the SQLite store (US-1 through US-10) works identically against an xlsx workbook, by making the storage layer swappable rather than writing a second, parallel implementation of any user story.
+
+### 14.3 Design Decisions
+- **Backend abstraction, not a parallel codebase.** `raid_db.py`'s four-function interface (`ensure_db`, `load_entries`, `update_fields`, `reset_db`) becomes a contract. A new `raid_xlsx.py` implements the same four functions against an openpyxl workbook. A thin facade, `raid_store.py`, picks the backend by the target path's extension (`.db` → SQLite, `.xlsx` → Excel) and is what `raid_data.py` and every other module call — none of their own logic needs to know or care which backend is active.
+- **Committed template stays untouched**, mirroring `raid_mock_data.json`'s role as a canonical, never-overwritten seed (Section 4.1). Automation always operates on a working copy at a path the PM supplies, auto-created from the template on first use — exactly like `raid_log.db` is auto-created from `raid_mock_data.json`.
+- **Independent seed data.** The xlsx backend's seed rows are whatever's already in `RAID-log-template.xlsx` — its own example dataset, separate from the 27 entries in `raid_mock_data.json`. The two stay independent, same principle as Section 4.1's data-independence rule for the Sprint Planning Automator repo, just applied within this project's own two data sources.
+- **Schema extended for Materialized, Dependency Links, Blocked By, and Start Date.** These four columns are added to the working copy so US-5 (Materialize conversion) and US-8 (Sprint Ready, which requires a Start Date) work against xlsx too. This reverses an earlier draft of this decision, which omitted Start Date entirely on the theory that it was needed to prevent US-3's auto-promotion — building it revealed that theory was wrong: `compute_status()` only promotes when Status is literally the string `"Not Started"`, and this backend's Status vocabulary (`Open/Monitoring/Escalated/Closed`, taken as-is from the template's own Legend sheet) never contains that value. So the auto-promotion the PM wanted to avoid is actually gated by the Status vocabulary difference, not by Start Date's presence — meaning Start Date can be added for Sprint Ready's sake without reopening that door at all. Verified directly: an entry with Start Date populated still shows `status_changed: False` on every run.
+- **The template's own Status vocabulary is preserved as-is, not remapped.** Inspecting the actual file found the Legend sheet already defines Status as `Open / Monitoring / Escalated / Closed` — four values, not the JSON schema's five (no "Not Started"/"In Progress" split). This is what actually prevents US-3's auto-promotion for xlsx (see above), not Start Date's presence or absence. Nothing in this codebase ever writes "Not Started" or "In Progress" itself — only US-4's "Escalated" and US-7's "Closed" are ever written back — so no remapping layer is needed. A blank Status cell defaults to "Open" (this backend's equivalent starting point).
+- **Priority Score and Days Open are never written by this tool, on either backend.** Inspecting the actual template found both columns already contain live Excel formulas (`=IF(OR(F5="",G5=""),"",F5*G5)` for Priority, similar for Days Open, blanking correctly on Closed) with cached values matching this project's exact business rules already. Overwriting them with static numbers would make the sheet worse (losing live recalculation) for no benefit, since the math is identical — so this tool reads neither as input (as already decided) and writes neither as output either, the same way Priority/Days Open are never persisted anywhere on the SQLite path.
+- **No validation flags written to the sheet.** Reversed from the original draft, for symmetry: validation (US-2) has never persisted its flags anywhere on the SQLite/JSON path either — they're report-only output. The Notes column is a PM's free-text field and this tool never touches it.
+
+### 14.4 Storage
+- `raid_xlsx.py`'s `ensure_db(file_path, template_path)`: if `file_path` doesn't exist, copies `template_path`, adds the Materialized/Dependency Links/Blocked By/Start Date columns (empty for existing rows), and saves as the working copy.
+- `load_entries(file_path)`: reads the "RAID Log" sheet's rows into the same entry-dict shape used everywhere else in the codebase. `priority_score`/`days_open` are not read as input at all — calculated fields never are. Raises clearly on a duplicate ID within the sheet (Section 14.6) rather than silently keeping one.
+- `update_fields(file_path, entry_id, **fields)`: finds the row by ID, writes only Status/Category/Materialized — the identical three fields `raid_db.update_fields()` writes, and nothing else (Priority Score/Days Open cells are never touched, per 14.3).
+- `reset_db(file_path, template_path)`: deletes the working copy and reseeds fresh from the template, same contract as `raid_db.reset_db()` (US-10).
+- `--data`'s default becomes backend-aware: if `--db`/the target path ends in `.xlsx` and `--data` wasn't explicitly given, it defaults to `RAID-log-template.xlsx` instead of `raid_mock_data.json`.
+
+### 14.5 User Stories & Acceptance Criteria
+
+**US-11:** As a Program Manager, I want to run the exact same RAID log automation against an Excel file instead of JSON, so I can work in the tool I'd actually use day to day.
+- *Acceptance:* Pointing the tool's store path at a `.xlsx` file instead of a `.db` file runs identical logic — scoring (US-1), validation (US-2), Days Open (US-3's date math; Status auto-promotion never fires, per 14.3), escalation (US-4), Materialize conversion (US-5), digest (US-6), retention (US-7), Sprint Ready (US-8), and persistence/reset (US-9/US-10) — against that workbook, auto-created from `RAID-log-template.xlsx` on first use if it doesn't exist. The committed template is never modified by any operation.
+
+### 14.6 Edge Cases
+- Command run before the xlsx working copy exists → auto-created and seeded from `RAID-log-template.xlsx`, not an error (same as the SQLite path).
+- A workbook missing the new columns (e.g., hand-edited by a PM who deleted one) → treated as a data-integrity problem to surface clearly, not a silent `None`/crash.
+- Two entries with duplicate IDs in the sheet → flagged explicitly rather than silently keeping only one (SQLite's `PRIMARY KEY` catches this for free on that backend; xlsx has no such constraint, so this needs an explicit check).
+- The "never delete" guarantee (US-7) applies identically: `remove_entry` refuses regardless of backend.
+
+### 14.7 Definition of Done (v2 — xlsx automation)
+- `raid_xlsx.py` implements the full `ensure_db`/`load_entries`/`update_fields`/`reset_db` contract; `raid_store.py` dispatches to it by file extension.
+- Every existing module composes against `raid_store.py` instead of `raid_db.py` directly, with zero changes to any pure function's own logic.
+- US-11 acceptance criteria pass for every one of US-1 through US-10 running against an xlsx working copy, including a cross-process persistence test mirroring `test_persistence_integration.py`.
+- All existing SQLite-path tests continue to pass unchanged.
+- README updated with the xlsx workflow.
+
+**US-11 status: complete.** `raid_xlsx.py` and `raid_store.py` added; every module that previously called `raid_db.py` now calls `raid_store.py` instead, with zero changes to any pure function's own logic. Two design decisions from the original draft were reversed after actually inspecting the template's real content (live Excel formulas for Priority Score/Days Open; a four-value Status vocabulary in its Legend sheet) rather than assuming — both changes are documented in 14.3 with the reasoning. A third finding came from live testing after implementation: Start Date was initially omitted per the original no-auto-promotion decision, but that broke Sprint Ready (US-8) entirely, since it requires one — building it clarified that auto-promotion is actually gated by the Status vocabulary difference, not Start Date's presence, so Start Date was added back with the PM's confirmation once that was verified live. 251 tests passing across 13 test files (up from 209), including `test_xlsx_integration.py`'s cross-process idempotency tests and a template-checksum test proving the committed file is never modified by any operation.
+
+**Section 14 v2 scope (xlsx automation): fully complete.**

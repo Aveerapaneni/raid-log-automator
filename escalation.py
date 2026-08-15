@@ -19,7 +19,7 @@ from datetime import date, datetime, timezone
 
 import days_and_status as ds
 import raid_data
-import raid_db
+import raid_store
 import score_and_validate as sv
 
 PRIORITY_RANK = {"Low": 1, "Medium": 2, "High": 3}
@@ -129,7 +129,7 @@ def persist_escalations(db_path, events):
     Escalated) actually mean something across separate invocations,
     not just within one."""
     for event in events:
-        raid_db.update_fields(db_path, event["id"], status=ESCALATED)
+        raid_store.update_fields(db_path, event["id"], status=ESCALATED)
 
 
 def append_log(events, log_path):
@@ -163,8 +163,8 @@ def print_report(records, events, score_band, days_open_threshold):
 
 def main():
     parser = argparse.ArgumentParser(description="US-4: runtime-configurable escalation check.")
-    parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
-    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
+    parser.add_argument("--data", default=None, help="Path to the mock RAID dataset seed (JSON or xlsx template)")
+    parser.add_argument("--db", default=raid_store.DEFAULT_DB_PATH, help="Path to the persistent store (.db or .xlsx)")
     parser.add_argument("--score-band", dest="score_band", default=None, choices=list(PRIORITY_RANK))
     parser.add_argument("--days-open", dest="days_open", default=None, type=int)
     parser.add_argument("--today", default=None, help="Override 'today' as YYYY-MM-DD")
@@ -179,8 +179,9 @@ def main():
         return 1
 
     today = ds.parse_date(args.today) if args.today else None
+    seed_path = args.data or raid_store.default_seed_path(args.db)
 
-    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
+    dataset, entries = raid_data.load_converted_entries(seed_path, args.db)
 
     records = build_records(entries, today=today)
     timestamp = datetime.now(timezone.utc).isoformat()

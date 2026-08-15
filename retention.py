@@ -18,7 +18,7 @@ import argparse
 import sys
 
 import raid_data
-import raid_db
+import raid_store
 
 CLOSED = "Closed"
 
@@ -90,18 +90,19 @@ def self_check(dataset, entries):
 
 def main():
     parser = argparse.ArgumentParser(description="US-7: closed-entry retention.")
-    parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
-    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
+    parser.add_argument("--data", default=None, help="Path to the mock RAID dataset seed (JSON or xlsx template)")
+    parser.add_argument("--db", default=raid_store.DEFAULT_DB_PATH, help="Path to the persistent store (.db or .xlsx)")
     parser.add_argument("--close", metavar="ID", help="Set an entry's Status to Closed (persisted)")
     parser.add_argument("--remove", metavar="ID", help="Attempt to remove an entry — always refused")
     args = parser.parse_args()
 
-    dataset, entries = raid_data.load_converted_entries(args.data, args.db)
+    seed_path = args.data or raid_store.default_seed_path(args.db)
+    dataset, entries = raid_data.load_converted_entries(seed_path, args.db)
 
     if args.close:
         try:
             entries = close_entry(entries, args.close)
-            raid_db.update_fields(args.db, args.close, status=CLOSED)
+            raid_store.update_fields(args.db, args.close, status=CLOSED)
             print(f"{args.close}: Status set to Closed.")
         except KeyError as exc:
             print(f"Error: {exc}", file=sys.stderr)

@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """RAID Log Automator — single CLI entry point.
 
-Wraps the ten user-story modules (US-1 through US-10) as subcommands of
-one command, per Section 12's Definition of Done ("script runs end-to-end
-against the independent mock dataset"). Each subcommand is a thin
-dispatch to that story's own module -- the logic lives there; this file
-only wires up shared options (--data, --db, --today) and routing.
+Wraps the eleven user-story modules (US-1 through US-11) as subcommands
+of one command, per Section 12's Definition of Done ("script runs
+end-to-end against the independent mock dataset"). Each subcommand is a
+thin dispatch to that story's own module -- the logic lives there; this
+file only wires up shared options (--data, --db, --today) and routing.
 
-Per Section 13 (US-9), state lives in a local SQLite database
-(raid_log.db by default), auto-created and seeded from raid_mock_data.json
-on first use. raid_mock_data.json itself is never written to.
+Per Section 13 (US-9), state lives in a persistent store -- a local
+SQLite database (raid_log.db) by default, auto-created and seeded from
+raid_mock_data.json on first use. Per Section 14 (US-11), pointing --db
+at an .xlsx path instead runs identical logic against an Excel working
+copy, auto-created from RAID-log-template.xlsx. Either way the seed file
+itself is never written to.
 
 Run `python3 raid_tool.py <subcommand> --help` for a given subcommand's
 own options. `report` runs the full end-to-end picture in one command;
@@ -27,15 +30,15 @@ import digest as dg
 import escalation as esc
 import materialize_conversion as mc
 import raid_data
-import raid_db
+import raid_store
 import retention as rt
 import score_and_validate as sv
 import sprint_ready as sr
 
 
 def add_common_args(parser, today=True):
-    parser.add_argument("--data", default="raid_mock_data.json", help="Path to the mock RAID dataset JSON")
-    parser.add_argument("--db", default=raid_db.DEFAULT_DB_PATH, help="Path to the persistent SQLite store")
+    parser.add_argument("--data", default=None, help="Path to the mock RAID dataset seed (JSON or xlsx template; defaults based on --db's extension)")
+    parser.add_argument("--db", default=raid_store.DEFAULT_DB_PATH, help="Path to the persistent store (.db for SQLite, .xlsx for Excel)")
     if today:
         parser.add_argument("--today", default=None, help="Override 'today' as YYYY-MM-DD")
 
@@ -105,8 +108,8 @@ def cmd_sprint_ready(args):
 
 
 def cmd_reset_db(args):
-    raid_db.reset_db(args.db, args.data)
-    entries = raid_db.load_entries(args.db)
+    raid_store.reset_db(args.db, args.data)
+    entries = raid_store.load_entries(args.db)
     print(f"{args.db}: reset to the {len(entries)} entries in {args.data}.")
     print("All persisted state (Status/Category/Materialized changes) has been discarded.")
     return 0
@@ -118,7 +121,7 @@ def cmd_retain(args):
     if args.close:
         try:
             entries = rt.close_entry(entries, args.close)
-            raid_db.update_fields(args.db, args.close, status=rt.CLOSED)
+            raid_store.update_fields(args.db, args.close, status=rt.CLOSED)
             print(f"{args.close}: Status set to Closed.")
         except KeyError as exc:
             print(f"Error: {exc}", file=sys.stderr)
@@ -237,6 +240,8 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
+    if getattr(args, "data", None) is None:
+        args.data = raid_store.default_seed_path(args.db)
     return args.func(args)
 
 

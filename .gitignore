@@ -5,3 +5,5 @@ escalation_log.jsonl
 .coverage
 raid_log.db
 *.db
+*.xlsx
+!RAID-log-template.xlsx

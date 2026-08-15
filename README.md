@@ -20,7 +20,7 @@ Full requirements: [`raid-log-automator-PRD.md`](raid-log-automator-PRD.md).
 
 v1's eight user stories, each implemented as its own small, independently
 runnable Python module with a pure-function core and a pytest suite, plus
-US-9 and US-10 (v2's persistent-storage scope so far — see PRD Section 13):
+US-9 through US-11 (v2's scope so far — see PRD Sections 13 and 14):
 
 | Story | Module | What it does |
 |---|---|---|
@@ -34,16 +34,19 @@ US-9 and US-10 (v2's persistent-storage scope so far — see PRD Section 13):
 | US-8 | `sprint_ready.py` | Prioritized, unblocked-only "Sprint Ready" queue |
 | US-9 | `raid_db.py` | Local SQLite persistence — state changes survive across separate runs |
 | US-10 | `raid_db.py` | `reset-db` — explicit, whole-store reset back to the mock dataset |
+| US-11 | `raid_xlsx.py` | Same automation, running against an Excel workbook instead of SQLite |
 
 `raid_tool.py` is the single entry point that wires all of them together as
 subcommands, plus a `report` command that runs the full end-to-end picture in
-one shot. `raid_data.py` is a small shared helper most modules' `main()`
-uses to load current entries from the database (auto-seeding it from the
-JSON on first use) with the two automatic, rule-based transitions — the US-5
-conversion and the US-3 Status promotion — already applied and persisted, so
-a materialized Risk reads as an Issue, and a started item reads as "In
-Progress," consistently everywhere, regardless of which command happened to
-trigger the transition first.
+one shot. `raid_data.py` is a small shared helper most modules' `main()` uses
+to load current entries from the active store (auto-seeding it on first use)
+with the two automatic, rule-based transitions — the US-5 conversion and the
+US-3 Status promotion — already applied and persisted, so a materialized Risk
+reads as an Issue, and a started item reads as "In Progress," consistently
+everywhere, regardless of which command happened to trigger the transition
+first. `raid_store.py` is a thin facade in front of that: it picks SQLite
+(`raid_db.py`) or Excel (`raid_xlsx.py`) by the store path's file extension,
+so nothing else in the codebase needs to know or care which backend is active.
 
 Nothing in this project calls out to a live AI/API at runtime. Any
 AI-assisted text (e.g. writing a narrative on top of the digest's structured
@@ -124,18 +127,53 @@ happens as a side effect of any other command, and it never touches
 `raid_mock_data.json` itself. Safe to run against a database that doesn't
 exist yet (behaves like a fresh seed).
 
+### Excel workflow (US-11)
+
+Every command above also runs against an Excel workbook — point `--db` at
+an `.xlsx` path instead of a `.db` path:
+
+```bash
+python3 raid_tool.py report --db my_raid_log.xlsx --today 2026-08-15
+python3 raid_tool.py escalate --db my_raid_log.xlsx --score-band High --days-open 30
+```
+
+The first run auto-creates `my_raid_log.xlsx` as a working copy of
+`RAID-log-template.xlsx` — the committed template is never modified, same
+principle as `raid_mock_data.json`. `--data` defaults to whichever seed
+matches `--db`'s extension automatically, so you don't need to pass it
+explicitly for either backend.
+
+Two things are deliberately different on this path, both driven by what's
+actually in the template:
+- **Priority Score and Days Open are never written** by this tool on either
+  backend — the xlsx template already has live Excel formulas computing both
+  correctly, so overwriting them with static numbers would only make the
+  sheet worse.
+- **Status uses the template's own vocabulary** (`Open`/`Monitoring`/
+  `Escalated`/`Closed`, from its Legend sheet) rather than the JSON schema's
+  five values — so US-3's Not-Started→In-Progress auto-promotion never fires
+  here (there's no `Open`→`In Progress` mapping), and Status stays exactly
+  what's typed into the cell, except where US-4 or US-7 explicitly set it to
+  `Escalated` or `Closed`.
+
+Sprint Ready (US-8) still needs a Start Date — the working copy gets that
+column added (along with Materialized, Dependency Links, and Blocked By, all
+absent from the original template) precisely so it has somewhere to read
+one from.
+
 ### Tests
 
 ```bash
 python3 -m pytest
 ```
 
-209 tests across 10 test files, covering the pure logic functions directly
+251 tests across 13 test files, covering the pure logic functions directly
 (not just the CLI output) — boundary values, invalid ranges, idempotency,
 and every documented edge case from PRD Section 9. `test_persistence_integration.py`
-goes a step further for US-9: it shells out to `raid_tool.py` via
-`subprocess` so the idempotency guarantee is proven across genuinely
-separate process invocations, not just two calls within one Python process.
+and `test_xlsx_integration.py` go a step further for US-9 and US-11
+respectively: both shell out to `raid_tool.py` via `subprocess`, so the
+idempotency guarantee is proven across genuinely separate process
+invocations, not just two calls within one Python process.
 
 ## Data
 
@@ -145,6 +183,12 @@ Plan, missing Probability), a materialized Risk, blocked and Closed entries,
 and a genuine Priority + Date Raised tie — so the validation, escalation, and
 ordering logic has real cases to catch. See the `_schema_notes` key at the
 top of the file for what each planted case is testing.
+
+`RAID-log-template.xlsx` — a second, independent seed used only by the Excel
+backend (US-11), with its own 4 sample rows. It predates this project and
+isn't derived from `raid_mock_data.json` at all — the two stay separate, same
+principle as the data-independence rule for the Sprint Planning Automator
+repo, just applied within this project's own two data sources.
 
 ## Related project
 
