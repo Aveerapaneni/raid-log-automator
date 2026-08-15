@@ -78,7 +78,7 @@ To properly exercise the validation logic in US-2, the mock dataset should delib
 - ~~Persistence across runs~~ — scoped, see Section 13.
 - AI-generated digest narrative via a live API call — only if explicitly revisited as a cost decision, with a separate API key. Not yet scoped.
 - ~~Automating directly against the xlsx template using openpyxl~~ — scoped, see Section 14.
-- A deliberate, explicitly-scoped integration project genuinely connecting this tool with the Sprint Planning Automator, built as its own follow-up. Not yet scoped — on hold pending a look at that repo's actual schema.
+- ~~A deliberate, explicitly-scoped integration project genuinely connecting this tool with the Sprint Planning Automator~~ — scoped, see Section 15.
 
 ## 7. User Stories & Acceptance Criteria
 
@@ -236,3 +236,42 @@ The same automation logic that already works against the SQLite store (US-1 thro
 **US-11 status: complete.** `raid_xlsx.py` and `raid_store.py` added; every module that previously called `raid_db.py` now calls `raid_store.py` instead, with zero changes to any pure function's own logic. Two design decisions from the original draft were reversed after actually inspecting the template's real content (live Excel formulas for Priority Score/Days Open; a four-value Status vocabulary in its Legend sheet) rather than assuming — both changes are documented in 14.3 with the reasoning. A third finding came from live testing after implementation: Start Date was initially omitted per the original no-auto-promotion decision, but that broke Sprint Ready (US-8) entirely, since it requires one — building it clarified that auto-promotion is actually gated by the Status vocabulary difference, not Start Date's presence, so Start Date was added back with the PM's confirmation once that was verified live. 251 tests passing across 13 test files (up from 209), including `test_xlsx_integration.py`'s cross-process idempotency tests and a template-checksum test proving the committed file is never modified by any operation.
 
 **Section 14 v2 scope (xlsx automation): fully complete.**
+
+## 15. v2 Scope — Sprint Planning Automator Integration (Connector)
+
+### 15.1 Problem
+Both PM tools model related-but-different facets of the same fictional program — same author persona (Asha Veerpaneni), and the mock datasets already appear to narratively overlap: `RAID-log-template.xlsx`'s `R-001` ("Vendor may not deliver API access before sprint 12 start") lines up with Sprint Planning Automator's `sprint_12` (Team Alpha) and its `ALPHA-204` card ("Add SSO login option," sprint-ready, blocked on that same vendor API). Today, spotting that connection is entirely manual — neither tool is aware the other exists.
+
+Inspecting the actual Sprint Planning Automator repo (`data/mock_jira_data.json`, `src/sprint_planning_automator/`) found its real schema: `teams` (team_id, name, velocity, product_owner), `sprints` (sprint_id, team_id, start/end dates, goal), `cards` (card_id, team_id, sprint_id, title, priority, points, status), `resources` (OOO tracking). Notably, **cards have no individual assignee — ownership is team-level only** — while RAID entries require a *named individual* Owner (never a team, per US-2). There is no clean identity join key between "who owns this Risk" and "who owns this card."
+
+### 15.2 Goal
+A read-only connector that surfaces which open RAID items may affect which upcoming/active sprint, based on date-window overlap, without creating any dependency between the two original repos or touching either one's independence guarantee (Section 4.1).
+
+### 15.3 Design Decisions
+- **Correlation is date-window overlap, not identity.** A RAID entry's Target Date falling within a sprint's `[start_date, end_date]` window is flagged as "may affect this sprint." This is a proximity *signal* for the PM to manually review, not an authoritative link — given the owner-granularity mismatch above, there's no reliable way to assert a RAID item definitely belongs to one specific team's sprint. A RAID item can and will match multiple teams' sprints if their windows overlap the same date; the connector reports all matches rather than picking one.
+- **No new fields on either schema — confirmed deliberately, including an assignee field on Sprint Planning Automator's cards.** Deliberately avoids re-touching the RAID schema a third time (Materialized/Dependency Links/Blocked By/Start Date were already added for xlsx in Section 14). An individual `assignee` field on Sprint Planning's cards was considered as a stronger, identity-based correlation signal — there's already genuine name overlap between the two mock datasets even without it (`Jordan Lee` appears as both a RAID Owner and a Sprint Planning resource; `Dana Lee`/`Marcus Cho`/`Priya Nair` appear as both RAID owners and Sprint Planning team Product Owners) — but was explicitly deferred: Sprint Planning Automator is a completed, portfolio-done project (all 8 stories, 80 tests), and the PM chose not to reopen it for this connector's sake. If date-proximity correlation proves too noisy in practice, this is the natural next iteration to revisit — not built now.
+- **Read-only, both directions.** The connector reads each project's own data through its own existing public interface and writes nothing back to either store: `raid_data.load_converted_entries()` / `raid_store.load_entries()` on this side; `sprint_planning_automator.data_loader.load_data()` (the mock seed) plus `state_store.py` (finalized/active sprint edits, so correlation reflects current state, not just the original snapshot) on the other. Neither original repo's independence is touched — this connector is the one piece explicitly allowed to depend on both, exactly as anticipated by Section 6.
+- **Lives in its own new project**, not inside either existing repo (name TBD, e.g. `raid-sprint-bridge`). It imports from both as a consumer; neither existing repo imports or depends on it — matches Section 6's "a deliberate, explicitly-scoped integration project... built as its own follow-up."
+- **Closed RAID entries and inactive sprints are excluded** from correlation, mirroring the "excluded from active views" pattern already used throughout this project (digest, Sprint Ready).
+
+### 15.4 Data Sources
+- **RAID side:** `raid_data.load_converted_entries(seed_path, db_path)` — current entries with both automatic transitions (US-3, US-5) already applied, from whichever store (SQLite or xlsx) the PM points the connector at.
+- **Sprint side:** `sprint_planning_automator.data_loader.load_data(path)` for the mock JIRA seed's teams/sprints/cards/resources, plus `state_store.py`'s persisted active-sprint state for any mid-cycle edits (US-8 on that side) — so a RAID item is checked against the sprint window as it currently stands, not the original mock snapshot.
+
+### 15.5 User Stories & Acceptance Criteria
+
+**US-12:** As a Program Manager, I want to see which open RAID Risks, Assumptions, Issues, or Dependencies might affect an upcoming or active sprint, so I can flag the connection during sprint planning instead of discovering it mid-sprint.
+- *Acceptance:* For each open RAID entry with a Target Date set, the tool checks whether that date falls within any team's currently active or upcoming sprint window and reports every match — RAID ID, Category, Description; matching sprint's team, sprint_id, and date window. Entries with no Target Date, or already Closed, are excluded. The tool never writes to either project's data.
+
+### 15.6 Edge Cases
+- RAID entry has no Target Date → excluded from correlation (nothing to overlap a window with), not an error.
+- No active/upcoming sprints exist for any team → tool reports "no correlations found" clearly, not an error.
+- The other repo's path isn't found or isn't importable → a clear, actionable error (e.g. "point `--sprint-repo` at the Sprint Planning Automator checkout"), not a stack trace.
+- A RAID entry's window overlaps multiple sprints (different teams, or overlapping current/next sprints for one team) → all matches reported, not just the first.
+- Closed RAID entries and Done/inactive sprints → excluded, matching the precedent set by digest (US-6) and Sprint Ready (US-8).
+
+### 15.7 Definition of Done
+- New standalone script, runnable independently of both existing repos' own test suites, taking both repos' data paths as CLI arguments.
+- US-12 acceptance criteria pass against both projects' real data (not synthetic fixtures) — same testing philosophy as US-11's `raid_xlsx.py` tests, which caught real issues a synthetic fixture would have missed.
+- Neither RAID Log Automator's nor Sprint Planning Automator's own code, tests, or repo is modified by this work.
+- A README documents the correlation logic and how to point the connector at both repos.
