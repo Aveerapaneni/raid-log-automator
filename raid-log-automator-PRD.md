@@ -275,3 +275,7 @@ A read-only connector that surfaces which open RAID items may affect which upcom
 - US-12 acceptance criteria pass against both projects' real data (not synthetic fixtures) — same testing philosophy as US-11's `raid_xlsx.py` tests, which caught real issues a synthetic fixture would have missed.
 - Neither RAID Log Automator's nor Sprint Planning Automator's own code, tests, or repo is modified by this work.
 - A README documents the correlation logic and how to point the connector at both repos.
+
+**US-12 status: complete.** Built as its own new project, `raid-sprint-bridge`, at a sibling path to both existing repos — neither of which was modified. 12 tests pass: 8 against `find_correlations()` with synthetic data (boundary dates, exclusions, multi-window matches), 4 integration tests against both real checkouts. One honest, documented finding from testing against real data: the two projects' mock datasets currently produce **zero correlations** — Sprint Planning's mock sprints all run `2026-07-28` to `2026-08-11`, and none of the RAID mock entries' Target Dates fall in that window. That's asserted explicitly as an expected test result (not silently hidden), alongside a separate test proving the matching logic itself finds a match correctly when a real sprint window is combined with a synthetic RAID entry inside it — confirming the zero result is a fact about the current data, not the mechanism being broken.
+
+**Section 15 v2 scope (Sprint Planning Automator integration): fully complete.**
