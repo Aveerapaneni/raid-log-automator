@@ -81,6 +81,52 @@ Section 4 for the full writeup):
   concept (a prioritized, groomed queue) is genuinely analogous — but the
   implementation here is entirely self-contained.
 
+## Challenges & pivots
+
+Five points where something discovered *while building* changed the plan,
+not just the code — full detail and reasoning in `ARCHITECTURE.md` and
+`raid-log-automator-PRD.md` Sections 13–15.
+
+1. **v1's idempotency guarantee wasn't actually proven across process
+   boundaries.** Running `escalate` twice within one Python process looked
+   idempotent, but v1 had no persistence at all — a second real CLI
+   invocation would silently redo everything. Fixed in US-9/10 by adding
+   SQLite persistence, which also surfaced a real bug: two modules'
+   self-checks asserted "did this change *this run*," which only holds on
+   the very first run against a fresh database — corrected to assert final
+   state instead, with regression tests added to lock it in.
+2. **Adding Excel support wasn't "add a feature" — it forced a refactor.**
+   Every module was wired directly to `raid_db.py`. Building xlsx support
+   the same way would have meant a second, parallel copy of every story's
+   persistence logic. Introduced `raid_store.py` as a backend-dispatch
+   facade and rewired every module to depend on it instead — the one point
+   where a feature addition became an architecture change.
+3. **Two xlsx design decisions were reversed after opening the actual
+   file, not reasoned from the schema alone.** The original plan assumed
+   the tool would need to write Priority Score/Days Open and remap Status
+   to a five-value vocabulary. Inspecting `RAID-log-template.xlsx`
+   directly found it already had live Excel formulas computing both
+   scores correctly, plus a Legend sheet defining only four Status
+   values — overwriting the formulas would've made the sheet worse, and
+   the vocabulary mismatch already prevented the auto-promotion that
+   remapping was meant to guard against.
+4. **A theory about why a field was safe to omit turned out to be wrong.**
+   Start Date was deliberately left out of the xlsx schema on the theory
+   that it enabled unwanted Status auto-promotion. Building Sprint Ready
+   (US-8), which requires a Start Date, broke entirely — which forced
+   re-checking that theory. Auto-promotion turned out to be gated by the
+   Status vocabulary difference (point 3), not Start Date's presence, so
+   Start Date was added back once that was verified live.
+5. **The sprint-planning connector couldn't use the identity-based
+   correlation it was designed around.** The plan assumed a RAID Owner
+   could join to a sprint card's assignee. Inspecting the actual Sprint
+   Planning Automator schema found cards carry only team-level ownership,
+   no individual assignee — so identity-based correlation would have
+   required changing a different, already-complete project's schema,
+   which I chose not to reopen. Pivoted to date-window overlap between a
+   RAID item's Target Date and a sprint's window as a proximity signal for
+   the PM to review manually, not an authoritative link.
+
 ## Running it
 
 No API key, no external services, no network calls. Just Python 3 and
